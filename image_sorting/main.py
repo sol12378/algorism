@@ -14,7 +14,7 @@ SAMPLE_RATE = 44100
 AUDIO_BUFFER = 512
 
 # ============================================
-# Audio Synthesis
+# Audio Synthesis (Generative Music Engine)
 # ============================================
 class AudioSynthesizer:
     def __init__(self):
@@ -22,52 +22,135 @@ class AudioSynthesizer:
         pygame.mixer.init()
         self.current_sound = None
         
-    def generate_tone(self, frequency, duration=0.05, volume=0.3, attack=0.01, decay=0.02):
-        """Generate a soft marimba-like tone"""
+        # Pentatonic scale (Yona-nuki scale) - LOW frequency range
+        # C2-A4 Pentatonic: Deep, warm, bass-heavy tones (no piercing highs)
+        self.pentatonic_scale = [
+            65.41,   # C2
+            73.42,   # D2
+            82.41,   # E2
+            98.00,   # G2
+            110.00,  # A2
+            130.81,  # C3
+            146.83,  # D3
+            164.81,  # E3
+            196.00,  # G3
+            220.00,  # A3
+            261.63,  # C4
+            293.66,  # D4
+            329.63,  # E4
+            392.00,  # G4
+            440.00,  # A4
+        ]
+        
+    def apply_fade_envelope(self, wave, fade_ms=7):
+        """
+        Apply fade-in and fade-out envelope to eliminate click noise.
+        Args:
+            wave: numpy array of audio samples
+            fade_ms: fade duration in milliseconds (default 7ms)
+        """
+        fade_samples = int(SAMPLE_RATE * fade_ms / 1000.0)
+        fade_samples = min(fade_samples, len(wave) // 4)  # Max 25% of wave length
+        
+        if fade_samples > 0:
+            # Fade in
+            fade_in = np.linspace(0, 1, fade_samples, dtype=np.float32)
+            wave[:fade_samples] *= fade_in
+            
+            # Fade out
+            fade_out = np.linspace(1, 0, fade_samples, dtype=np.float32)
+            wave[-fade_samples:] *= fade_out
+        
+        return wave
+    
+    def generate_marimba_tone(self, frequency, duration=0.045, volume=0.22):
+        """
+        Generate soft marimba-like tone for Selection Sort.
+        Characteristics: warm, wooden, percussive with fast attack.
+        """
         num_samples = int(SAMPLE_RATE * duration)
         t = np.linspace(0, duration, num_samples, dtype=np.float32)
         
-        # Marimba-like tone: fundamental + harmonics with decay
+        # Marimba timbre: fundamental + harmonics with exponential decay
         wave = np.sin(2 * np.pi * frequency * t)
-        wave += 0.5 * np.sin(2 * np.pi * frequency * 2 * t) * np.exp(-t * 20)
-        wave += 0.25 * np.sin(2 * np.pi * frequency * 4 * t) * np.exp(-t * 30)
+        wave += 0.5 * np.sin(2 * np.pi * frequency * 2 * t) * np.exp(-t * 18)
+        wave += 0.3 * np.sin(2 * np.pi * frequency * 4 * t) * np.exp(-t * 35)
+        wave += 0.15 * np.sin(2 * np.pi * frequency * 6 * t) * np.exp(-t * 50)
         
-        # ADSR envelope
-        envelope = np.ones(num_samples, dtype=np.float32)
-        attack_samples = int(SAMPLE_RATE * attack)
-        decay_samples = int(SAMPLE_RATE * decay)
-        
-        if attack_samples > 0:
-            envelope[:attack_samples] = np.linspace(0, 1, attack_samples)
-        
-        release_start = int(num_samples * 0.6)
-        envelope[release_start:] = np.linspace(1, 0, num_samples - release_start)
-        
+        # Percussive envelope: fast attack, exponential decay
+        envelope = np.exp(-t * 12) * (1 - np.exp(-t * 100))
         wave = wave * envelope * volume
+        
+        # Apply fade to remove clicks
+        wave = self.apply_fade_envelope(wave, fade_ms=5)
+        
         wave = np.clip(wave, -1, 1)
         wave = (wave * 32767).astype(np.int16)
         
-        return pygame.sndobj.Sound(buffer=wave.tobytes()) if hasattr(pygame, 'sndobj') else pygame.mixer.Sound(buffer=wave.tobytes())
+        return pygame.mixer.Sound(buffer=wave.tobytes())
+    
+    def generate_windchime_tone(self, frequency, duration=0.08, volume=0.12):
+        """
+        Generate crystalline wind chime tone for Cycle Resolving.
+        Characteristics: bright, bell-like, ethereal with shimmer.
+        """
+        num_samples = int(SAMPLE_RATE * duration)
+        t = np.linspace(0, duration, num_samples, dtype=np.float32)
+        
+        # Wind chime timbre: multiple inharmonic partials (bell-like)
+        wave = np.sin(2 * np.pi * frequency * t)
+        wave += 0.4 * np.sin(2 * np.pi * frequency * 2.76 * t)  # Inharmonic
+        wave += 0.25 * np.sin(2 * np.pi * frequency * 5.40 * t)  # Inharmonic
+        wave += 0.15 * np.sin(2 * np.pi * frequency * 8.93 * t)  # Inharmonic
+        
+        # Add subtle shimmer (FM modulation)
+        modulator = 0.08 * np.sin(2 * np.pi * 6 * t)
+        wave = wave * (1 + modulator)
+        
+        # Bell-like envelope: instant attack, slow decay with shimmer
+        envelope = np.exp(-t * 6) * (1 + 0.15 * np.sin(2 * np.pi * 8 * t))
+        wave = wave * envelope * volume
+        
+        # Apply fade to remove clicks
+        wave = self.apply_fade_envelope(wave, fade_ms=8)
+        
+        wave = np.clip(wave, -1, 1)
+        wave = (wave * 32767).astype(np.int16)
+        
+        return pygame.mixer.Sound(buffer=wave.tobytes())
     
     def play_progress_tone(self, progress, total):
-        """Play tone based on sorting progress (low to high)"""
-        # Map progress to frequency (C3 to C6 range)
-        base_freq = 130.81  # C3
-        freq_range = 4  # 4 octaves
-        freq = base_freq * (2 ** (freq_range * progress / total))
-        freq = min(freq, 2093)  # Cap at C7
+        """
+        Selection Sort: The Scanner
+        Rising scale as sorting progresses - mapped to pentatonic scale.
+        """
+        # Map progress to pentatonic scale index
+        scale_position = int((progress / total) * (len(self.pentatonic_scale) - 1))
+        scale_position = min(scale_position, len(self.pentatonic_scale) - 1)
         
-        sound = self.generate_tone(freq, duration=0.04, volume=0.2)
+        freq = self.pentatonic_scale[scale_position]
+        
+        sound = self.generate_marimba_tone(freq, duration=0.04, volume=0.18)
         sound.play()
         
     def play_swap_tone(self, index, total):
-        """Play tone for random swaps (shell sort)"""
-        # Pentatonic scale for pleasant random sounds
-        pentatonic = [261.63, 293.66, 329.63, 392.00, 440.00, 523.25, 587.33, 659.25]
-        freq = pentatonic[index % len(pentatonic)]
-        freq *= (1 + (index / total) * 0.5)
+        """
+        Cycle Resolving: The Rain
+        Random pixels popping into place - wind chime droplets.
+        """
+        # Map pixel position to pentatonic scale (cyclic)
+        # Use brightness/luminosity for more musical variation
+        scale_position = index % len(self.pentatonic_scale)
         
-        sound = self.generate_tone(freq, duration=0.03, volume=0.15)
+        # Stay in lower-mid range for warm, deep tones
+        scale_position = min(scale_position + 2, len(self.pentatonic_scale) - 1)
+        
+        freq = self.pentatonic_scale[scale_position]
+        
+        # Add slight randomization for organic feel (±3%)
+        freq *= (0.97 + random.random() * 0.06)
+        
+        sound = self.generate_windchime_tone(freq, duration=0.075, volume=0.10)
         sound.play()
 
     def play_fanfare(self):

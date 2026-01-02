@@ -7,15 +7,17 @@ import math
 # Configuration
 # ============================================
 WIDTH, HEIGHT = 800, 800
+CANVAS_WIDTH, CANVAS_HEIGHT = 160, 160  # Low-res pixel art canvas
 FPS = 60
-PADDING = 50
+PADDING = 10  # Padding on the low-res canvas
 
-# Colors (Neon Aesthetics)
-BG_COLOR = (20, 20, 25)
-NODE_COLOR = (255, 255, 255)
-PATH_COLOR = (0, 255, 150)  # Neon Green
-CANDIDATE_COLOR = (80, 80, 100, 60)  # Semi-transparent for candidate routes
-TEXT_COLOR = (200, 200, 200)
+# Colors (Retro Pixel Art Palette)
+BG_COLOR = (45, 27, 46)  # Purple-ish dark gray
+NODE_COLOR = (255, 230, 80)  # Bright yellow
+PATH_COLOR = (255, 50, 150)  # Neon Magenta/Pink
+PATH_ALT_COLOR = (50, 255, 200)  # Cyan (alternative)
+FLASH_COLOR = (255, 255, 255)  # White flash on improvement
+TEXT_COLOR = (150, 150, 150)
 
 # TSP Parameters
 INITIAL_TEMP = 100.0
@@ -24,7 +26,10 @@ MIN_TEMP = 0.01
 
 # Audio Parameters
 SAMPLE_RATE = 22050
-DURATION = 0.15  # Short, satisfying beep
+DURATION = 0.12  # Short chiptune beep
+
+# Flash effect
+FLASH_DURATION = 3  # frames
 
 
 # ============================================
@@ -40,14 +45,15 @@ class TSPSolver:
         self.current_distance = float('inf')
         self.temperature = INITIAL_TEMP
         self.paused = False
+        self.flash_timer = 0
         self.generate_cities()
         
     def generate_cities(self):
-        """Generate random cities with padding from edges."""
+        """Generate random cities with padding from edges (on low-res canvas)."""
         self.cities = [
             (
-                random.randint(PADDING, WIDTH - PADDING),
-                random.randint(PADDING, HEIGHT - PADDING)
+                random.randint(PADDING, CANVAS_WIDTH - PADDING),
+                random.randint(PADDING, CANVAS_HEIGHT - PADDING)
             )
             for _ in range(self.num_cities)
         ]
@@ -58,6 +64,7 @@ class TSPSolver:
         self.current_distance = self.calculate_distance(self.current_route)
         self.best_distance = self.current_distance
         self.temperature = INITIAL_TEMP
+        self.flash_timer = 0
         
     def calculate_distance(self, route):
         """Calculate total distance of a route."""
@@ -96,47 +103,57 @@ class TSPSolver:
             if self.current_distance < self.best_distance:
                 self.best_route = self.current_route[:]
                 self.best_distance = self.current_distance
+                self.flash_timer = FLASH_DURATION
                 return True  # Signal improvement (for audio)
         
         # Cool down
         self.temperature *= COOLING_RATE
         return False
+    
+    def update_flash(self):
+        """Update flash timer."""
+        if self.flash_timer > 0:
+            self.flash_timer -= 1
 
 
 # ============================================
-# Audio System
+# Audio System (Chiptune Style)
 # ============================================
 class AudioSystem:
     def __init__(self):
         pygame.mixer.init(frequency=SAMPLE_RATE, size=-16, channels=1, buffer=512)
-        self.min_distance = 10000
-        self.max_distance = 50000
+        self.min_distance = 500
+        self.max_distance = 5000
         
     def play_improvement_sound(self, distance):
-        """Play a satisfying beep when solution improves.
+        """Play a chiptune-style beep when solution improves.
         Higher pitch = shorter distance (better solution)."""
         # Map distance to frequency (shorter distance = higher pitch)
-        # Typical range: 300 Hz (long) to 1200 Hz (short)
+        # Range: 300 Hz (long) to 1400 Hz (short)
         normalized = (distance - self.min_distance) / (self.max_distance - self.min_distance)
         normalized = max(0, min(1, normalized))  # Clamp to [0, 1]
-        frequency = 1200 - (normalized * 900)  # Inverse: shorter = higher
+        frequency = 1400 - (normalized * 1100)  # Inverse: shorter = higher
         
-        # Generate sine wave with envelope
+        # Generate square wave (chiptune style)
         samples = int(SAMPLE_RATE * DURATION)
         t = np.linspace(0, DURATION, samples, False)
         
-        # Sine wave
-        wave = np.sin(2 * np.pi * frequency * t)
+        # Square wave: sign of sine wave
+        wave = np.sign(np.sin(2 * np.pi * frequency * t))
         
-        # ADSR-like envelope (quick attack, gentle decay)
+        # Add some harmonics for richer sound
+        wave += 0.3 * np.sign(np.sin(2 * np.pi * frequency * 2 * t))
+        wave = wave / np.max(np.abs(wave))  # Normalize
+        
+        # Envelope (quick attack, fast decay for punchy sound)
         envelope = np.ones_like(t)
-        attack_samples = int(samples * 0.05)
+        attack_samples = int(samples * 0.02)
         decay_samples = samples - attack_samples
         envelope[:attack_samples] = np.linspace(0, 1, attack_samples)
-        envelope[attack_samples:] = np.linspace(1, 0, decay_samples)
+        envelope[attack_samples:] = np.linspace(1, 0, decay_samples) ** 2  # Exponential decay
         
         # Apply envelope
-        wave = wave * envelope * 0.3  # Volume control
+        wave = wave * envelope * 0.25  # Volume control
         
         # Convert to 16-bit audio
         wave = (wave * 32767).astype(np.int16)
@@ -147,69 +164,32 @@ class AudioSystem:
 
 
 # ============================================
-# Rendering
+# Rendering (Pixel Art Pipeline)
 # ============================================
-def draw_route(surface, solver, route, color, width=2, alpha=255):
-    """Draw a route with specified color and width."""
+def draw_route(canvas, solver, route, color):
+    """Draw a route on the low-res canvas."""
     if len(route) < 2:
         return
     
-    if alpha < 255:
-        # Create transparent surface for semi-transparent routes
-        temp_surface = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        for i in range(len(route)):
-            city_a = solver.cities[route[i]]
-            city_b = solver.cities[route[(i + 1) % len(route)]]
-            pygame.draw.line(temp_surface, (*color, alpha), city_a, city_b, width)
-        surface.blit(temp_surface, (0, 0))
-    else:
-        for i in range(len(route)):
-            city_a = solver.cities[route[i]]
-            city_b = solver.cities[route[(i + 1) % len(route)]]
-            pygame.draw.line(surface, color, city_a, city_b, width)
+    for i in range(len(route)):
+        city_a = solver.cities[route[i]]
+        city_b = solver.cities[route[(i + 1) % len(route)]]
+        pygame.draw.line(canvas, color, city_a, city_b, 1)  # 1 pixel width on canvas
 
 
-def draw_cities(surface, solver):
-    """Draw city nodes as white glowing dots."""
+def draw_cities(canvas, solver):
+    """Draw city nodes as 2x2 pixel dots."""
     for city in solver.cities:
-        # Outer glow
-        pygame.draw.circle(surface, (150, 150, 150), city, 5)
-        # Inner bright core
-        pygame.draw.circle(surface, NODE_COLOR, city, 3)
+        # Draw 2x2 pixel block
+        pygame.draw.rect(canvas, NODE_COLOR, (city[0] - 1, city[1] - 1, 2, 2))
 
 
-def draw_ui(surface, solver, font):
-    """Draw UI information."""
-    distance_text = f"Distance: {solver.best_distance:.1f}"
-    temp_text = f"Temperature: {solver.temperature:.2f}"
-    cities_text = f"Cities: {solver.num_cities}"
-    
+def draw_ui(canvas, solver, font):
+    """Draw minimal UI (very small, unobtrusive)."""
+    # Only show distance in corner, very small
+    distance_text = f"{int(solver.best_distance)}"
     text_surface = font.render(distance_text, True, TEXT_COLOR)
-    surface.blit(text_surface, (20, 20))
-    
-    text_surface = font.render(temp_text, True, TEXT_COLOR)
-    surface.blit(text_surface, (20, 50))
-    
-    text_surface = font.render(cities_text, True, TEXT_COLOR)
-    surface.blit(text_surface, (20, 80))
-    
-    # Controls
-    controls = [
-        "SPACE: Pause/Resume",
-        "R: Reset",
-        "C: Change City Count"
-    ]
-    y_offset = HEIGHT - 100
-    for control in controls:
-        text_surface = font.render(control, True, (120, 120, 120))
-        surface.blit(text_surface, (20, y_offset))
-        y_offset += 25
-    
-    if solver.paused:
-        pause_font = pygame.font.Font(None, 72)
-        pause_text = pause_font.render("PAUSED", True, (255, 100, 100))
-        text_rect = pause_text.get_rect(center=(WIDTH // 2, HEIGHT // 2))
-        surface.blit(pause_text, text_rect)
+    canvas.blit(text_surface, (2, 2))
 
 
 # ============================================
@@ -218,17 +198,22 @@ def draw_ui(surface, solver, font):
 def main():
     pygame.init()
     screen = pygame.display.set_mode((WIDTH, HEIGHT))
-    pygame.display.set_caption("TSP Visualizer - Untangling the Knot")
+    pygame.display.set_caption("TSP Visualizer - Pixel Art Edition")
     clock = pygame.time.Clock()
-    font = pygame.font.Font(None, 32)
+    
+    # Low-res canvas for pixel art rendering
+    canvas = pygame.Surface((CANVAS_WIDTH, CANVAS_HEIGHT))
+    
+    # Tiny pixel font
+    font = pygame.font.Font(None, 8)
     
     # Initialize systems
-    solver = TSPSolver(num_cities=80)
+    solver = TSPSolver(num_cities=60)
     audio = AudioSystem()
     
     # City count rotation
-    city_counts = [50, 100, 200]
-    current_count_index = 1  # Start with 80 (not in list, but close to 100)
+    city_counts = [40, 60, 80]
+    current_count_index = 1
     
     running = True
     while running:
@@ -255,17 +240,27 @@ def main():
                 if improved:
                     audio.play_improvement_sound(solver.best_distance)
         
-        # Render
-        screen.fill(BG_COLOR)
+        # Update flash effect
+        solver.update_flash()
         
-        # Draw best route (neon green)
-        draw_route(screen, solver, solver.best_route, PATH_COLOR, width=3)
+        # Render on low-res canvas
+        canvas.fill(BG_COLOR)
+        
+        # Determine path color (flash white on improvement)
+        path_color = FLASH_COLOR if solver.flash_timer > 0 else PATH_COLOR
+        
+        # Draw best route
+        draw_route(canvas, solver, solver.best_route, path_color)
         
         # Draw cities
-        draw_cities(screen, solver)
+        draw_cities(canvas, solver)
         
-        # Draw UI
-        draw_ui(screen, solver, font)
+        # Draw minimal UI
+        draw_ui(canvas, solver, font)
+        
+        # Scale up canvas to screen (pixel art effect)
+        scaled_surface = pygame.transform.scale(canvas, (WIDTH, HEIGHT))
+        screen.blit(scaled_surface, (0, 0))
         
         pygame.display.flip()
         clock.tick(FPS)
